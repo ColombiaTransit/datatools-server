@@ -122,8 +122,4 @@ jobs:
           # important for the purposes of creating this "latest branch" jar).
           ALL_JARS=(target/dt-*.jar)
           FIRST_JAR="${ALL_JARS[0]}"
-          cp "$FIRST_JAR" "deploy/dt-latest-$BRANCH_CLEAN.jar"
-      - name: Deploy to S3
-        if: github.event_name == 'push'
-        run: |
-          aws s3 cp ./deploy s3://datatools-builds --recursive --acl public-read
+          cp "$FIRST_JAR" "deploy/dt-latest-$BRANCH_CLEAN.jar"     
