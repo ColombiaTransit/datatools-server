@@ -189,12 +189,14 @@ class SqlSchemaUpdaterTest extends UnitTest {
                 feedSource,
                 "namespace"
             );
-
-            // Go ahead and update the tables.
-            try {
-                schemaUpdater.upgradeNamespaceIfNotOrphanOrDeleted(namespaceCheck);
-            } catch (StorageException e) {
-                fail("Orphan namespaces should not be upgraded.");
+            
+            if (namespaceCheck != null) {
+                // Go ahead and update the tables.
+                try {
+                    schemaUpdater.upgradeNamespaceIfNotOrphanOrDeleted(namespaceCheck);
+                } catch (StorageException e) {
+                    fail("Orphan namespaces should not be upgraded.");
+                }
             }
         }
     }
