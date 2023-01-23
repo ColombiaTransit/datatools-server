@@ -1,0 +1,138 @@
+name: Java CI CT
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    env:
+      # Only deploy JARs to S3 (and run semantic release) on push to dev or master,
+      # or if the commit message includes the specified "label".
+      SAVE_JAR_TO_S3: ${{ github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'master' || contains(github.event.head_commit.message, '[save-jar]')) }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:10.8
+        # Set postgres env variables according to test env.yml config
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: catalogue
+        ports:
+          - 5432:5432
+        # Set health checks to wait until postgres has started
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up JDK 1.8
+        uses: actions/setup-java@v1
+        with:
+          java-version: 1.8
+      # Install node 14 for running e2e tests (and for maven-semantic-release).
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v1
+        with:
+          node-version: 18.x
+      - name: Start MongoDB
+        uses: supercharge/mongodb-github-action@1.3.0
+        with:
+          mongodb-version: 4.2
+      - name: Setup Maven Cache
+        uses: actions/cache@v2
+        id: cache
+        with:
+          path: ~/.m2
+          key: maven-local-repo
+      - name: Inject slug/short variables # so that we can reference $GITHUB_HEAD_REF_SLUG for branch name
+        uses: rlespinasse/github-slug-action@v3.x
+      - name: Install maven-semantic-release
+        # FIXME: Enable cache for node packages (add package.json?)
+        run: |
+          yarn global add @conveyal/maven-semantic-release semantic-release
+          # Add yarn path to GITHUB_PATH so that global package is executable.
+          echo "$(yarn global bin)" >> $GITHUB_PATH
+        # run a script to see if the e2e tests should be ran. This script will set the environment variable SHOULD_RUN_E2E
+        # which is used in later CI commands.
+      - name: Check if end-to-end tests should run
+        run: ./scripts/check-if-e2e-tests-should-run-on-ci.sh
+      - name: Add profile credentials to ~/.aws/credentials
+        run: ./scripts/add-aws-credentials.sh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Setup GTFS+ directory (used during testing)
+        run: mkdir /tmp/gtfsplus
+      - name: Build with Maven (run unit tests)
+        run: mvn --no-transfer-progress package
+      - name: Run e2e tests
+        if: env.SHOULD_RUN_E2E == 'true'
+        run: mvn test
+        env:
+          AUTH0_API_CLIENT: ${{ secrets.AUTH0_API_CLIENT }}
+          AUTH0_API_SECRET: ${{ secrets.AUTH0_API_SECRET }}
+          AUTH0_CLIENT_ID: ${{ secrets.AUTH0_CLIENT_ID }}
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
+          AUTH0_SECRET: ${{ secrets.AUTH0_SECRET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          E2E_AUTH0_PASSWORD: ${{ secrets.E2E_AUTH0_PASSWORD }}
+          E2E_AUTH0_USERNAME: ${{ secrets.E2E_AUTH0_USERNAME }}
+          GRAPH_HOPPER_KEY: ${{ secrets.GRAPH_HOPPER_KEY }}
+          GTFS_DATABASE_PASSWORD: ${{ secrets.GTFS_DATABASE_PASSWORD }}
+          GTFS_DATABASE_URL: ${{ secrets.GTFS_DATABASE_URL }}
+          GTFS_DATABASE_USER: ${{ secrets.GTFS_DATABASE_USER }}
+          MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+          MONGO_DB_NAME: ${{ secrets.MONGO_DB_NAME }}
+          OSM_VEX: ${{ secrets.OSM_VEX }}
+          RUN_E2E: "true"
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          SPARKPOST_EMAIL: ${{ secrets.SPARKPOST_EMAIL }}
+          SPARKPOST_KEY: ${{ secrets.SPARKPOST_KEY }}
+          TRANSITFEEDS_KEY: ${{ secrets.TRANSITFEEDS_KEY }}
+
+      # Run maven-semantic-release to potentially create a new release of datatools-server. The flag --skip-maven-deploy is
+      # used to avoid deploying to maven central. So essentially, this just creates a release with a changelog on github.
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v1
+        with:
+          node-version: 18.x
+      - name: Run maven-semantic-release
+        if: env.SAVE_JAR_TO_S3 == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          semantic-release --prepare @conveyal/maven-semantic-release --publish @semantic-release/github,@conveyal/maven-semantic-release --verify-conditions @semantic-release/github,@conveyal/maven-semantic-release --verify-release @conveyal/maven-semantic-release --use-conveyal-workflow --dev-branch=dev --skip-maven-deploy
+      # The git commands get the commit hash of the HEAD commit and the commit just before HEAD.
+      - name: Prepare deploy artifacts
+        if: env.SAVE_JAR_TO_S3 == 'true'
+        # (pull_request will deploy a temp. merge commit. See #400.)
+        run: |
+          # get branch name of current branch for use in jar name
+          export BRANCH=$GITHUB_REF_SLUG
+          # Replace forward slashes with underscores in branch name.
+          export BRANCH_CLEAN=${BRANCH//\//_}
+          # Create directory that will contain artifacts to deploy to s3.
+          mkdir deploy
+          # Display contents of target directory (for logging purposes only).
+          ls target/*.jar
+          # Copy packaged jar over to deploy dir.
+          cp target/dt-*.jar deploy/
+          # Get the first jar file and copy it into a new file that adds the current branch name. During a
+          # merge to master, there are multiple jar files produced, but they're each effectively the same
+          # code (there may be slight differences in the version shown in the `pom.xml`, but that's not
+          # important for the purposes of creating this "latest branch" jar).
+          ALL_JARS=(target/dt-*.jar)
+          FIRST_JAR="${ALL_JARS[0]}"
+          cp "$FIRST_JAR" "deploy/dt-latest-$BRANCH_CLEAN.jar"   
+      
+      - name: Release new graph
+        uses: ncipollo/release-action@v1
+        if: env.SAVE_JAR_TO_S3 == 'true'
+        with:
+          artifacts: deploy/dt-latest-$BRANCH_CLEAN
+          tag: dt-latest-$BRANCH_CLEAN
