@@ -129,10 +129,16 @@ jobs:
           ALL_JARS=(target/dt-*.jar)
           FIRST_JAR="${ALL_JARS[0]}"
           cp "$FIRST_JAR" "deploy/dt-latest-$BRANCH_CLEAN.jar"   
+          
+      - name: Get timestamp for release
+        id: timestamp
+        env:
+          TZ: Europe/Amsterdam
+        run: echo "timestamp=$(date +'dt-%Y-%m-%dT%H-%M-%S')" >> $GITHUB_OUTPUT
       
       - name: Release new graph
         uses: ncipollo/release-action@v1
         if: env.SAVE_JAR_TO_S3 == 'true'
         with:
           artifacts: deploy/dt-latest-*.jar
-          tag: dt-latest-$BRANCH_CLEAN
+          tag: ${{ steps.timestamp.outputs.timestamp }}
