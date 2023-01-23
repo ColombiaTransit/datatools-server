@@ -134,5 +134,5 @@ jobs:
         uses: ncipollo/release-action@v1
         if: env.SAVE_JAR_TO_S3 == 'true'
         with:
-          artifacts: deploy/dt-latest-$BRANCH_CLEAN
+          artifacts: deploy/dt-latest-*.jar
           tag: dt-latest-$BRANCH_CLEAN
