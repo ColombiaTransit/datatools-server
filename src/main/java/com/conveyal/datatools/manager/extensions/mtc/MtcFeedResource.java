@@ -2,6 +2,7 @@ package com.conveyal.datatools.manager.extensions.mtc;
 
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.s3.model.PutObjectRequest;
+import com.conveyal.datatools.common.utils.CloseableHttpURLConnection;
 import com.conveyal.datatools.common.utils.aws.CheckedAWSException;
 import com.conveyal.datatools.common.utils.aws.S3Utils;
 import com.conveyal.datatools.manager.DataManager;
@@ -51,6 +52,8 @@ public class MtcFeedResource implements ExternalFeedResource {
     public static final String TEST_AGENCY = "test-agency";
     public static final String AGENCY_ID_FIELDNAME = "AgencyId";
     public static final String RESOURCE_TYPE = "MTC";
+    public static final String STOP_CODE_PRIMARY_PREFIX_FIELD_NAME = "PrimaryPrefix";
+    public static final String STOP_CODE_SECONDARY_PREFIXES_FIELD_NAME = "SecondaryPrefixes";
 
     private String rtdApi, s3Bucket, s3Prefix;
 
@@ -81,8 +84,8 @@ public class MtcFeedResource implements ExternalFeedResource {
             throw ex;
         }
 
-        try {
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        try (CloseableHttpURLConnection closeableCon = new CloseableHttpURLConnection(url)) {
+            HttpURLConnection conn = closeableCon.getConnection();
             //add request header
             conn.setRequestProperty("User-Agent", "User-Agent");
             // add auth header
@@ -221,12 +224,12 @@ public class MtcFeedResource implements ExternalFeedResource {
      * Update or create a carrier and its properties with an HTTP request to the RTD.
      */
     private void writeCarrierToRtd(RtdCarrier carrier, boolean createNew, String authHeader) throws IOException {
-        try {
+        URL rtdUrl = new URL(rtdApi + "/Carrier/" + (createNew ? "" : carrier.AgencyId));
+        try (CloseableHttpURLConnection closeableCon = new CloseableHttpURLConnection(rtdUrl)) {
             String carrierJson = carrier.toJson();
 
-            URL rtdUrl = new URL(rtdApi + "/Carrier/" + (createNew ? "" : carrier.AgencyId));
             LOG.info("Writing to RTD URL: {} JSON >>>{}", rtdUrl, carrierJson);
-            HttpURLConnection connection = (HttpURLConnection) rtdUrl.openConnection();
+            HttpURLConnection connection = closeableCon.getConnection();
 
             connection.setRequestMethod(createNew ? "POST" : "PUT");
             connection.setDoOutput(true);
@@ -234,10 +237,10 @@ public class MtcFeedResource implements ExternalFeedResource {
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Authorization", authHeader);
 
-            OutputStreamWriter osw = new OutputStreamWriter(connection.getOutputStream());
-            osw.write(carrierJson);
-            osw.flush();
-            osw.close();
+            try (OutputStreamWriter osw = new OutputStreamWriter(connection.getOutputStream())) {
+                osw.write(carrierJson);
+                osw.flush();
+            }
             LOG.info(
                 "RTD API {} response: {}/{}",
                 connection.getRequestMethod(),
@@ -254,24 +257,24 @@ public class MtcFeedResource implements ExternalFeedResource {
      * Fetch agency properties from RTD and update the ExternalFeedSourceProperty collection in Mongo.
      */
     private void fetchCarrierFromRtdAndUpdateMongo(FeedSource source, RtdCarrier carrier, String authHeader) throws IOException {
+        HttpURLConnection connection = null;
         try {
             URL rtdUrl = new URL(rtdApi + "/Carrier/" + carrier.AgencyId);
             LOG.info("Fetching to RTD URL: {}", rtdUrl);
-            HttpURLConnection connection = (HttpURLConnection) rtdUrl.openConnection();
+            connection = (HttpURLConnection) rtdUrl.openConnection();
 
             connection.setRequestMethod("GET");
             connection.setRequestProperty("Content-Type", "application/json");
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Authorization", authHeader);
 
-            BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-            String inputLine;
             StringBuilder response = new StringBuilder();
-
-            while ((inputLine = in.readLine()) != null) {
-                response.append(inputLine);
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                String inputLine;
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
             }
-            in.close();
 
             LOG.info("RTD API GET response: {}/{}", connection.getResponseCode(), connection.getResponseMessage());
 
@@ -282,6 +285,10 @@ public class MtcFeedResource implements ExternalFeedResource {
         } catch (Exception e) {
             LOG.error("Error writing to RTD", e);
             throw e;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 
@@ -336,5 +343,15 @@ public class MtcFeedResource implements ExternalFeedResource {
     static String convertRtdString(String s) {
         if ("null".equals(s)) return "";
         return s;
+    }
+
+    public static String getFieldValue(Map<String, Map<String, String>> properties, String fieldName) {
+        Map<String, String> values = properties.get(RESOURCE_TYPE);
+        return values.get(fieldName);
+    }
+
+    public static List<String> getSecondaryStopCodePrefixes(Map<String, Map<String, String>> properties) {
+        String secondaryStopPrefixValue = MtcFeedResource.getFieldValue(properties, MtcFeedResource.STOP_CODE_SECONDARY_PREFIXES_FIELD_NAME);
+        return (secondaryStopPrefixValue == null) ? null : List.of(secondaryStopPrefixValue.split(","));
     }
 }

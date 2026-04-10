@@ -10,6 +10,7 @@ import com.conveyal.datatools.common.utils.Scheduler;
 import com.conveyal.datatools.common.utils.aws.CheckedAWSException;
 import com.conveyal.datatools.common.utils.aws.S3Utils;
 import com.conveyal.datatools.manager.DataManager;
+import com.conveyal.datatools.manager.extensions.ExternalPropertiesRetriever;
 import com.conveyal.datatools.manager.jobs.CreateFeedVersionFromSnapshotJob;
 import com.conveyal.datatools.manager.jobs.FetchSingleFeedJob;
 import com.conveyal.datatools.manager.jobs.MergeFeedsJob;
@@ -35,13 +36,13 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -96,6 +97,9 @@ public class FeedSource extends Model implements Cloneable {
 
     /** The name of this feed source, e.g. MTA New York City Subway */
     public String name;
+
+    /** An optional display filename for the feed in the bundle, e.g. "agency_transit.zip" */
+    public String filename;
 
     /** Is this feed public, i.e. should it be listed on the
      * public feeds page for download?
@@ -229,11 +233,12 @@ public class FeedSource extends Model implements Cloneable {
             conn.connect();
             return processFetchResponse(status, optionalUrlOverride, version, latest, new HttpURLConnectionResponse(conn));
         } catch (IOException e) {
-            String message = String.format("Unable to connect to %s; not fetching %s feed", conn.getURL(), this.name); // url, this.name);
-            LOG.error(message);
+            String message = String.format("Unable to connect to %s; not fetching %s feed", conn.getURL(), this.name);
+            LOG.error(message, e);
             status.fail(message);
-            e.printStackTrace();
             return null;
+        } finally {
+            conn.disconnect();
         }
     }
 
@@ -269,6 +274,7 @@ public class FeedSource extends Model implements Cloneable {
         LOG.info("Fetching from {}", url.toString());
 
         // make the request, using the proper HTTP caching headers to prevent refetch, if applicable
+        // Http URL connection must be closed by calling method.
         HttpURLConnection conn;
         try {
             conn = (HttpURLConnection) url.openConnection();
@@ -319,7 +325,9 @@ public class FeedSource extends Model implements Cloneable {
                     status.update(message, 75.0);
                     // Create new file from input stream (this also handles hashing the file and other version fields
                     // calculated from the GTFS file.
-                    newGtfsFile = version.newGtfsFile(response.getInputStream());
+                    try (InputStream inputStream = response.getInputStream()) {
+                        newGtfsFile = version.newGtfsFile(inputStream);
+                    }
                     break;
                 case HttpURLConnection.HTTP_MOVED_TEMP:
                 case HttpURLConnection.HTTP_MOVED_PERM:
@@ -507,20 +515,7 @@ public class FeedSource extends Model implements Cloneable {
     @JsonView(JsonViews.UserInterface.class)
     @JsonProperty("externalProperties")
     public Map<String, Map<String, String>> externalProperties() {
-
-        Map<String, Map<String, String>> resourceTable = new HashMap<>();
-
-        for(String resourceType : DataManager.feedResources.keySet()) {
-            Map<String, String> propTable = new HashMap<>();
-
-            // Get all external properties for the feed source/resource type and fill prop table.
-            Persistence.externalFeedSourceProperties
-                .getFiltered(and(eq("feedSourceId", this.id), eq("resourceType", resourceType)))
-                .forEach(prop -> propTable.put(prop.name, prop.value));
-
-            resourceTable.put(resourceType, propTable);
-        }
-        return resourceTable;
+        return ExternalPropertiesRetriever.retrieveFeedSourceExternalProperties(id);
     }
 
     /**

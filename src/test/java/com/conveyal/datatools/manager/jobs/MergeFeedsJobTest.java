@@ -87,6 +87,10 @@ public class MergeFeedsJobTest extends UnitTest {
     public static void setUp() throws IOException {
         // start server if it isn't already running
         DatatoolsTest.setUp();
+        ProcessSingleFeedJob.ENABLE_ADDITIONAL_VALIDATION = false;
+        // Enable MTC extension, but disable the transformations.
+        ProcessSingleFeedJob.ENABLE_MTC_TRANSFORMATIONS = false;
+        DatatoolsTest.enableMTCExtension();
         Auth0Connection.setAuthDisabled(true);
 
         // Create a project, feed sources, and feed versions to merge.
@@ -163,6 +167,9 @@ public class MergeFeedsJobTest extends UnitTest {
         if (project != null) {
             project.delete();
         }
+        DatatoolsTest.resetMTCExtension();
+        ProcessSingleFeedJob.ENABLE_MTC_TRANSFORMATIONS = true;
+        ProcessSingleFeedJob.ENABLE_ADDITIONAL_VALIDATION = true;
     }
 
     /**

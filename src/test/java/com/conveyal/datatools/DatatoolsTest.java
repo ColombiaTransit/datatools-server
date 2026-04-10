@@ -24,6 +24,8 @@ public abstract class DatatoolsTest {
     private static final Logger LOG = LoggerFactory.getLogger(DatatoolsTest.class);
     private static boolean setUpIsDone = false;
     private static final Yaml yaml = new Yaml(); // needed for writing config files on CI for the e2e tests
+    private static final String MTC_ENABLED_FIELDS = "extensions.mtc.enabled";
+    private static final String PREV_MTC_ENABLED = DataManager.getConfigPropertyAsText(MTC_ENABLED_FIELDS);
 
     @BeforeAll
     public static void setUp() throws RuntimeException, IOException {
@@ -63,6 +65,9 @@ public abstract class DatatoolsTest {
         LOG.info("Starting server");
         try {
             DataManager.main(args);
+            // Disable the MTC extension by default. This is to prevent MTC transformations from being triggered in
+            // ProcessSingleFeedJob.
+            DataManager.overrideConfigProperty("extensions.mtc.enabled", "false");
             setUpIsDone = true;
         } catch (IOException e) {
             e.printStackTrace();
@@ -114,16 +119,18 @@ public abstract class DatatoolsTest {
             // load template file contents
             LOG.info("Loading YAML config templates");
             String envTemplateFile = "configurations/default/env.yml.tmp";
-
-            Map envConfig = yaml.load(
-                new FileInputStream(new File(envTemplateFile))
-            );
-
             String serverTemplateFile = "configurations/default/server.yml.tmp";
-            Map serverConfig = yaml.load(
-                new FileInputStream(new File(serverTemplateFile))
-            );
 
+            Map envConfig;
+            Map serverConfig;
+
+            try (
+                FileInputStream envStream = new FileInputStream(envTemplateFile);
+                FileInputStream serverStream = new FileInputStream(serverTemplateFile)
+            ) {
+                envConfig = yaml.load(envStream);
+                serverConfig = yaml.load(serverStream);
+            }
             // write sensitive info to the config files
             // env.yml
             String[] envVars = {
@@ -160,5 +167,13 @@ public abstract class DatatoolsTest {
             yaml.dump(envConfig, new FileWriter("configurations/default/env.yml"));
             yaml.dump(serverConfig, new FileWriter("configurations/default/server.yml"));
         }
+    }
+
+    public static void enableMTCExtension() {
+        DataManager.overrideConfigProperty(MTC_ENABLED_FIELDS, "true");
+    }
+
+    public static void resetMTCExtension() {
+        DataManager.overrideConfigProperty(MTC_ENABLED_FIELDS, PREV_MTC_ENABLED);
     }
 }

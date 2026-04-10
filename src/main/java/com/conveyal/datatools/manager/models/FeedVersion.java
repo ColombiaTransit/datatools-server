@@ -2,7 +2,10 @@ package com.conveyal.datatools.manager.models;
 
 import com.conveyal.datatools.common.status.MonitorableJob;
 import com.conveyal.datatools.common.utils.Scheduler;
+import com.conveyal.datatools.common.utils.aws.CheckedAWSException;
 import com.conveyal.datatools.manager.DataManager;
+import com.conveyal.datatools.manager.extensions.mtc.MtcFeedResource;
+import com.conveyal.datatools.manager.gtfsplus.GtfsPlusValidation;
 import com.conveyal.datatools.manager.jobs.ValidateFeedJob;
 import com.conveyal.datatools.manager.jobs.ValidateMobilityDataFeedJob;
 import com.conveyal.datatools.manager.jobs.validation.RouteTypeValidatorBuilder;
@@ -16,15 +19,18 @@ import com.conveyal.gtfs.error.NewGTFSErrorType;
 import com.conveyal.gtfs.graphql.fetchers.JDBCFetcher;
 import com.conveyal.gtfs.loader.Feed;
 import com.conveyal.gtfs.loader.FeedLoadResult;
+import com.conveyal.gtfs.util.InvalidNamespaceException;
 import com.conveyal.gtfs.validator.MTCValidator;
 import com.conveyal.gtfs.validator.ValidationResult;
 import com.conveyal.gtfs.validator.model.Priority;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonView;
 import org.bson.Document;
+import org.bson.codecs.pojo.annotations.BsonIgnore;
 import org.bson.codecs.pojo.annotations.BsonProperty;
 import org.mobilitydata.gtfsvalidator.runner.ApplicationType;
 import org.mobilitydata.gtfsvalidator.runner.ValidationRunner;
@@ -48,6 +54,8 @@ import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.util.Date;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -74,6 +82,8 @@ public class FeedVersion extends Model implements Serializable {
     private static final Logger LOG = LoggerFactory.getLogger(FeedVersion.class);
     // FIXME: move this out of FeedVersion (also, it should probably not be public)?
     public static FeedStore feedStore = new FeedStore();
+
+    private static LocalDate dateOverrideForTesting = null;
     /**
      * Input feed versions used to create a merged version.
      */
@@ -267,6 +277,8 @@ public class FeedVersion extends Model implements Serializable {
 
     public Document mobilityDataResult;
 
+    public GtfsPlusValidation gtfsPlusValidation;
+
     public String formattedTimestamp() {
         SimpleDateFormat format = new SimpleDateFormat(HUMAN_READABLE_TIMESTAMP_FORMAT);
         return format.format(this.updated);
@@ -365,15 +377,24 @@ public class FeedVersion extends Model implements Serializable {
             // FIXME: pass status to validate? Or somehow listen to events?
             status.update("Validating feed...", 33);
 
+            FeedSource fs = Persistence.feedSources.getById(this.feedSourceId);
+
             // Validate the feed version.
             // Certain extensions, if enabled, have extra validators.
             if (isExtensionEnabled("mtc")) {
+                Map<String, Map<String, String>> properties = fs.externalProperties();
+                String primaryStopCodePrefix = MtcFeedResource.getFieldValue(properties, MtcFeedResource.STOP_CODE_PRIMARY_PREFIX_FIELD_NAME);
+                List<String> secondaryStopCodePrefixes = MtcFeedResource.getSecondaryStopCodePrefixes(properties);
                 validationResult = GTFS.validate(feedLoadResult.uniqueIdentifier, DataManager.GTFS_DATA_SOURCE,
                     RouteTypeValidatorBuilder::buildRouteValidator,
-                    MTCValidator::new
+                    (feed, errorStorage) -> new MTCValidator(
+                        feed,
+                        errorStorage,
+                        primaryStopCodePrefix,
+                        secondaryStopCodePrefixes
+                    )
                 );
             } else {
-                FeedSource fs = Persistence.feedSources.getById(this.feedSourceId);
 
                 /*
                   Get feed_id from feed version
@@ -442,8 +463,10 @@ public class FeedVersion extends Model implements Serializable {
             status.update("MobilityData Analysis...", 80);
             // Read generated report and save to Mongo.
             String json;
-            try (FileReader fr = new FileReader(validatorOutputDirectory + "report.json")) {
-                BufferedReader in = new BufferedReader(fr);
+            try (
+                FileReader fr = new FileReader(validatorOutputDirectory + "report.json");
+                BufferedReader in = new BufferedReader(fr)
+            ) {
                 json = in.lines().collect(Collectors.joining(System.lineSeparator()));
             }
 
@@ -457,6 +480,28 @@ public class FeedVersion extends Model implements Serializable {
         }
     }
 
+    /**
+     * Produce GTFS+ validation results for this feed version if GTFS+ module is enabled.
+     */
+    public void validateGtfsPlus(MonitorableJob.Status status) {
+
+        // Sometimes this method is called when no status object is available.
+        if (status == null) status = new MonitorableJob.Status();
+
+        if (DataManager.isModuleEnabled("gtfsplus")) {
+            try {
+                gtfsPlusValidation = GtfsPlusValidation.validate(this);
+            } catch (Exception e) {
+                LOG.warn("Unable to validate GTFS+ validation.", e);
+                status.fail(String.format("Unable to validate feed %s", this.id), e);
+                validationResult = new ValidationResult();
+                validationResult.fatalException = "failure!";
+            }
+        } else {
+            LOG.warn("GTFS+ module not enabled, skipping GTFS+ validation.");
+        }
+    }
+
     public void validate() {
         validate(null);
     }
@@ -467,7 +512,7 @@ public class FeedVersion extends Model implements Serializable {
      */
     public boolean hasCriticalErrors() {
         return hasValidationAndLoadErrors() ||
-            hasFeedVersionExpired() ||
+            hasExpired() ||
             hasHighSeverityErrorTypes();
     }
 
@@ -489,9 +534,23 @@ public class FeedVersion extends Model implements Serializable {
      * Has this feed expired?
      * @return If the validation result last calendar date is null or has expired return true, else return false.
      */
-    private boolean hasFeedVersionExpired() {
+    @JsonIgnore
+    @BsonIgnore
+    public boolean hasExpired() {
+        return hasExpired(validationResult);
+    }
+
+    public static boolean hasExpired(ValidationResult validationResult) {
         return validationResult.lastCalendarDate == null ||
-            LocalDate.now().isAfter(validationResult.lastCalendarDate);
+            getNowAsLocalDate().isAfter(validationResult.lastCalendarDate);
+    }
+
+    private static LocalDate getNowAsLocalDate() {
+        return dateOverrideForTesting == null ? LocalDate.now() : dateOverrideForTesting;
+    }
+
+    public static void setDateOverrideForTesting(LocalDate value) {
+        dateOverrideForTesting = value;
     }
 
     /**
@@ -500,32 +559,41 @@ public class FeedVersion extends Model implements Serializable {
      */
     private boolean hasHighSeverityErrorTypes() {
         return hasSpecificErrorTypes(Stream.of(NewGTFSErrorType.values())
-            .filter(type -> type.priority == Priority.HIGH));
+            .filter(type -> type.priority == Priority.HIGH), namespace, name);
     }
 
     /**
      * Checks for issues that block feed publishing, consistent with UI.
      */
     public boolean hasBlockingIssuesForPublishing() {
-        if (this.validationResult.fatalException != null) return true;
+        return hasBlockingIssuesForPublishing(validationResult, namespace, name);
+    }
+
+    public static boolean hasBlockingIssuesForPublishing(
+        ValidationResult validationResult,
+        String namespace,
+        String name
+    ) {
+        if (validationResult.fatalException != null) return true;
 
         return hasSpecificErrorTypes(Stream.of(
             NewGTFSErrorType.ILLEGAL_FIELD_VALUE,
             NewGTFSErrorType.MISSING_COLUMN,
+            NewGTFSErrorType.MISSING_STOP_CODE_PREFIX,
+            NewGTFSErrorType.MULTIPLE_SHARED_STOPS_GROUPS,
             NewGTFSErrorType.REFERENTIAL_INTEGRITY,
             NewGTFSErrorType.SERVICE_WITHOUT_DAYS_OF_WEEK,
-            NewGTFSErrorType.TABLE_MISSING_COLUMN_HEADERS,
+            NewGTFSErrorType.SHARED_STOP_GROUP_MULTIPLE_PRIMARY_STOPS,
             NewGTFSErrorType.TABLE_IN_SUBDIRECTORY,
-            NewGTFSErrorType.WRONG_NUMBER_OF_FIELDS,
-            NewGTFSErrorType.MULTIPLE_SHARED_STOPS_GROUPS,
-            NewGTFSErrorType.SHARED_STOP_GROUP_MULTIPLE_PRIMARY_STOPS
-        ));
+            NewGTFSErrorType.TABLE_MISSING_COLUMN_HEADERS,
+            NewGTFSErrorType.WRONG_NUMBER_OF_FIELDS
+        ), namespace, name);
     }
 
     /**
      * Determines whether this feed has specific error types.
      */
-    private boolean hasSpecificErrorTypes(Stream<NewGTFSErrorType> errorTypes) {
+    private static boolean hasSpecificErrorTypes(Stream<NewGTFSErrorType> errorTypes, String namespace, String name) {
         Set<String> highSeverityErrorTypes = errorTypes
             .map(NewGTFSErrorType::toString)
             .collect(Collectors.toSet());
@@ -580,10 +648,8 @@ public class FeedVersion extends Model implements Serializable {
             }
             ensurePublishedVersionIdIsUnset(fs);
 
-            feedStore.deleteFeed(id);
-            // Delete feed version tables in GTFS database
-            GTFS.delete(this.namespace, DataManager.GTFS_DATA_SOURCE);
-            LOG.info("Dropped version's GTFS tables from Postgres.");
+            deleteFeedVersionFile();
+            deleteDBSchema(namespace);
             // Remove this FeedVersion from all Deployments associated with this FeedVersion's FeedSource's Project
             // TODO TEST THOROUGHLY THAT THIS UPDATE EXPRESSION IS CORRECT
             // Although outright deleting the feedVersion from deployments could be surprising and shouldn't be done anyway.
@@ -598,6 +664,52 @@ public class FeedVersion extends Model implements Serializable {
             LOG.info("Version {} deleted", id);
         } catch (Exception e) {
             LOG.warn("Error deleting version", e);
+        }
+    }
+
+    /**
+     * Delete resources related to this orphaned feed version. Then delete the orphaned feed version.
+     */
+    public void deleteOrphan() {
+        deleteFeedVersionFile();
+        deleteDBSchema(namespace);
+        if (DataManager.isModuleEnabled("gtfsplus")) {
+            try {
+                FeedStore gtfsPlusStore = new FeedStore(DataManager.GTFS_PLUS_SUBDIR);
+                gtfsPlusStore.deleteFeed(id + ".db");
+                gtfsPlusStore.deleteFeed(id + ".db.p");
+            } catch (CheckedAWSException e) {
+                LOG.error("Failed to delete GTFS+ files.");
+            }
+        }
+        Persistence.feedVersions.removeById(id);
+    }
+
+    /**
+     * Delete the feed version file related to this feed version.
+     */
+    private void deleteFeedVersionFile() {
+        try {
+            feedStore.deleteFeed(id);
+        } catch (CheckedAWSException e) {
+            LOG.error("Failed to delete feed version file.");
+        }
+    }
+
+    /**
+     * Delete the database schema related to this feed version. Catch all related errors to prevent follow on tasks from
+     * being skipped.
+     */
+    public static void deleteDBSchema(String schema) {
+        if (schema == null) {
+            LOG.warn("Schema is null! Unable to delete feed version's GTFS schema from Postgres.");
+            return;
+        }
+        try {
+            GTFS.delete(schema, DataManager.GTFS_DATA_SOURCE);
+            LOG.info("Deleted feed version's GTFS schema from Postgres.");
+        } catch (SQLException | InvalidNamespaceException e) {
+            LOG.error("Failed to delete feed version's GTFS schema from Postgres.");
         }
     }
 
