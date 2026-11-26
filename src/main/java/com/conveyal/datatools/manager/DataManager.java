@@ -6,6 +6,7 @@ import com.conveyal.datatools.common.utils.Scheduler;
 import com.conveyal.datatools.common.utils.SparkUtils;
 import com.conveyal.datatools.editor.controllers.EditorLockController;
 import com.conveyal.datatools.editor.controllers.api.EditorControllerImpl;
+import com.conveyal.datatools.editor.controllers.api.GraphHopperController;
 import com.conveyal.datatools.editor.controllers.api.SnapshotController;
 import com.conveyal.datatools.manager.auth.Auth0Connection;
 import com.conveyal.datatools.manager.controllers.DumpController;
@@ -214,6 +215,7 @@ public class DataManager {
 
             SnapshotController.register(EDITOR_API_PREFIX);
             EditorLockController.register(EDITOR_API_PREFIX);
+            GraphHopperController.register(EDITOR_API_PREFIX);
 
             new EditorControllerImpl(EDITOR_API_PREFIX, Table.AREAS, DataManager.GTFS_DATA_SOURCE);
             new EditorControllerImpl(EDITOR_API_PREFIX, Table.AGENCY, DataManager.GTFS_DATA_SOURCE);
