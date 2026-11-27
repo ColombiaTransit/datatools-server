@@ -2,22 +2,68 @@
 
 In this example, Keycloak runs at `https://sso.example.org` and the Datatools UI and API share `https://datatools.example.org`. Replace both addresses with your own. Use Datatools server and UI builds that include OIDC support.
 
+## Choose a realm
+
+Use an existing application realm if it already contains the users who should
+sign in to Datatools. Create a realm if you need a separate set of users or
+authentication policies. Keycloak reserves the `master` realm for administration.
+
+To create a realm, open the realm selector in the Keycloak Admin Console and
+choose **Create realm**. Leave **Resource file** empty, enter a **Realm name**
+(for example, `transit`), keep **Enabled** on, and click **Create**.
+
+![Keycloak Create realm dialog with the Resource file and Realm name fields, the Enabled toggle and the Create button](images/keycloak-create-realm.png)
+
+Select the realm before creating the client. If you created a realm, make sure
+the intended first Datatools administrator has an account there before testing
+sign-in. Use the selected realm's issuer URL in step 2.
+
 ## 1. Create the client in Keycloak
 
-In the Keycloak Admin Console, select your application realm (here, `transit`) and go to **Clients → Create client**. Choose **OpenID Connect** as the client type and enter `datatools` as the client ID.
+In the Keycloak Admin Console, select your application realm (here, `transit`)
+and go to **Clients → Create client**.
 
-| Setting | Example |
-| --- | --- |
-| Client authentication | On |
-| Standard flow | On |
-| Implicit flow, Direct access grants and Service accounts roles | Off |
-| Valid redirect URIs | `https://datatools.example.org/api/auth/oidc/callback` |
-| Web origins | Leave empty for this server-side flow |
-| PKCE method, under Advanced or Capability config depending on the Keycloak version | `S256` |
-| ID token signature algorithm | `RS256`, either inherited from the realm or configured for this client |
-| ID token encryption | Unset |
+### General settings
 
-Register the exact redirect URI, including the scheme, hostname, port if applicable and path. Keep the standard `profile` and `email` client scopes available so Datatools can display the user's name and email. Under **Credentials**, use **Client ID and Secret** as the client authenticator. Save the generated secret in your deployment's secret store.
+Choose **OpenID Connect** under **Client type**, set **Client ID** to `datatools`,
+and enter an optional display name. Click **Next**.
+
+![General settings with OpenID Connect selected and datatools entered as the client ID](images/keycloak-client-general.png)
+
+### Capability config
+
+Turn **Client authentication** on and select **Standard flow**. Leave
+**Authorization**, **Direct access grants**, **Implicit flow**, **Service account
+roles**, and the other grant types off. Leave **Require DPoP bound tokens** off.
+
+![Capability config with Client authentication and Standard flow enabled, before enabling Require PKCE](images/keycloak-client-capabilities.png)
+
+Turn **Require PKCE** on to reveal **PKCE Method**, then select or keep
+`S256`. Click **Next**.
+
+![Require PKCE switched on and PKCE Method set to S256](images/keycloak-require-pkce.png)
+
+On older Keycloak releases without the switch, select `S256` under
+**Proof Key for Code Exchange Code Challenge Method** in the client's
+**Advanced** settings after saving.
+
+### Login settings
+
+Enter `https://datatools.example.org/api/auth/oidc/callback` under **Valid redirect
+URIs**, replacing the example origin with your own. Register the exact URI,
+including the scheme, hostname, port if applicable, and path. Leave **Web
+origins** empty for this server-side flow. Leave **Valid post logout redirect
+URIs** empty because Datatools ends its own session. **Root URL** and **Home
+URL** are optional for this configuration. Click **Save**.
+
+![Login settings with the empty Valid redirect URIs field selected](images/keycloak-client-login.png)
+
+After saving, confirm that the client uses `RS256` for ID token signatures,
+either inherited from the realm or configured for this client. Leave ID token
+encryption unset. Keep the standard `profile` and `email` client scopes available
+so Datatools can display the user's name and email. Under **Credentials**, use
+**Client ID and Secret** as the client authenticator. Save the generated secret
+in your deployment's secret store.
 
 See the [Keycloak Server Administration Guide](https://www.keycloak.org/docs/latest/server_admin/#_oidc_clients) for the client settings.
 
