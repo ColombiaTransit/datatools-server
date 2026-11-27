@@ -34,9 +34,9 @@
 
     <!-- Define where the source code for project lives -->
     <scm>
-        <connection>scm:git:https://github.com/ibi-group/datatools-server.git</connection>
-        <developerConnection>scm:git:ssh://git@github.com/ibi-group/datatools-server.git</developerConnection>
-        <url>https://github.com/ibi-group/datatools-server.git</url>
+        <connection>scm:git:https://github.com/ColombiaTransit/datatools-server.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/ColombiaTransit/datatools-server.git</developerConnection>
+        <url>https://github.com/ColombiaTransit/datatools-server.git</url>
     </scm>
     <properties>
         <jackson.version>2.18.11</jackson.version>
