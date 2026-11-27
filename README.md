@@ -37,6 +37,38 @@ browser Origin header and removes the local session. It does not end the
 provider's SSO session. OIDC access, refresh and ID tokens are kept out of
 the browser and MongoDB.
 
+### Assign project and feed access
+
+Sign in with the intended first administrator and read `user.subject` from
+`GET /api/auth/oidc/session`. Set `OIDC_ADMIN_SUBJECT` on the server to that
+exact subject from the configured issuer and restart the server. Datatools
+uses the provider's subject identifier for this check. The user's email
+address has no effect on their rights.
+
+Other users appear after their first login, with no grants. An administrator
+can list these users through `GET /api/auth/oidc/users`. If the response includes
+a `next` cursor, pass it as `?after=<cursor>` for the next page. To read or
+replace all grants for one user, use `GET` or `PUT` at
+`/api/auth/oidc/users/<user.id>/grants`. Send the PUT request with the
+administrator's session and an `Origin` header matching `application.public_url`.
+
+```json
+{
+  "grants": [
+    {"projectId": "project-id", "role": "viewer"},
+    {"projectId": "project-id", "feedId": "feed-id", "role": "editor"}
+  ]
+}
+```
+
+A grant without a `feedId` applies to every feed in the project. Supported roles
+are `viewer`, `editor`, `feed-manager`, `approver` and `project-admin`. These
+map to the corresponding Datatools permissions. Project administrators manage
+the entire project. To revoke all assignments, send `{"grants":[]}`.
+The session endpoint returns the current grants under `permissions`. Use the
+preview endpoints to configure access while the UI and existing data APIs
+continue to use the current authentication configuration.
+
 ## Getting in touch
 
 We have a Gitter [space](https://matrix.to/#/#transit-data-tools:gitter.im) for the full TRANSIT-Data-Tools project where you can post questions and comments.
