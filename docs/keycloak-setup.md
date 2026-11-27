@@ -2,6 +2,22 @@
 
 In this example, Keycloak runs at `https://sso.example.org` and the Datatools UI and API share `https://datatools.example.org`. Replace both addresses with your own. Use Datatools server and UI builds that include OIDC support.
 
+## Choose a realm
+
+Use an existing application realm if it already contains the users who should
+sign in to Datatools. Create a realm if you need a separate set of users or
+authentication policies. Keycloak reserves the `master` realm for administration.
+
+To create a realm, open the realm selector in the Keycloak Admin Console and
+choose **Create realm**. Leave **Resource file** empty, enter a **Realm name**
+(for example, `transit`), keep **Enabled** on, and click **Create**.
+
+![Keycloak Create realm dialog with the Resource file and Realm name fields, the Enabled toggle and the Create button](images/keycloak-create-realm.png)
+
+Select the realm before creating the client. If you created a realm, make sure
+the intended first Datatools administrator has an account there before testing
+sign-in. Use the selected realm's issuer URL in step 2.
+
 ## 1. Create the client in Keycloak
 
 In the Keycloak Admin Console, select your application realm (here, `transit`) and go to **Clients → Create client**. Choose **OpenID Connect** as the client type and enter `datatools` as the client ID.
