@@ -9,6 +9,7 @@ import com.conveyal.datatools.editor.controllers.api.EditorControllerImpl;
 import com.conveyal.datatools.editor.controllers.api.GraphHopperController;
 import com.conveyal.datatools.editor.controllers.api.SnapshotController;
 import com.conveyal.datatools.manager.auth.Auth0Connection;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.controllers.DumpController;
 import com.conveyal.datatools.manager.controllers.api.AppInfoController;
 import com.conveyal.datatools.manager.controllers.api.DeploymentController;
@@ -323,6 +324,7 @@ public class DataManager {
             response.type("text/html");
             return auth0html;
         });
+        OidcController.registerIfEnabled();
 
         /////////////////    Final API routes     /////////////////////
 
@@ -341,13 +343,17 @@ public class DataManager {
 
         // add logger
         before((request, response) -> {
+            // OAuth callback query parameters include the short-lived authorization code.
+            if (request.pathInfo().startsWith(OidcController.PREFIX)) return;
             RequestSummary summary = RequestSummary.fromRequest(request);
             lastRequestForUser.put(summary.user, summary);
             logRequest(request, response);
         });
 
         // add logger
-        after(SparkUtils::logResponse);
+        after((request, response) -> {
+            if (!request.pathInfo().startsWith(OidcController.PREFIX)) SparkUtils.logResponse(request, response);
+        });
     }
 
     /**
