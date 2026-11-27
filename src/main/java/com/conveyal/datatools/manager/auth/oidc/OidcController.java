@@ -1,5 +1,6 @@
 package com.conveyal.datatools.manager.auth.oidc;
 
+import com.conveyal.datatools.manager.auth.Auth0UserProfile;
 import com.conveyal.datatools.manager.persistence.Persistence;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,8 +53,12 @@ public final class OidcController {
         sessionCookie = prefix + "datatools-oidc-session";
     }
 
-    public static void registerIfEnabled() throws IOException {
-        if (!Boolean.parseBoolean(setting("OIDC_ENABLED"))) return;
+    public static boolean isEnabled() {
+        return Boolean.parseBoolean(setting("OIDC_ENABLED"));
+    }
+
+    public static OidcController registerIfEnabled() throws IOException {
+        if (!isEnabled()) return null;
         URI origin = publicOrigin(URI.create(getConfigPropertyAsText("application.public_url", "")));
         String issuer = require("OIDC_ISSUER", setting("OIDC_ISSUER"));
         String clientId = require("OIDC_CLIENT_ID", setting("OIDC_CLIENT_ID"));
@@ -77,6 +82,7 @@ public final class OidcController {
         get(PREFIX + "users", controller::listUsers);
         get(PREFIX + "users/:id/grants", controller::getGrants);
         put(PREFIX + "users/:id/grants", controller::replaceGrants);
+        return controller;
     }
 
     private String login(Request request, Response response) {
@@ -183,6 +189,48 @@ public final class OidcController {
         if (identity == null) halt(401, error(response, 401, "An OIDC session is required."));
         if (!OidcPermissions.profile(identity, bootstrapSubject).canAdministerApplication()) {
             halt(403, error(response, 403, "Datatools administrator permission is required."));
+        }
+    }
+
+    /** Authenticate using current local grants, including changes since login. */
+    public void checkUser(Request request, Response response) {
+        if (requiresSameOrigin(request.requestMethod(), request.pathInfo())
+            && !matchesOrigin(origin, request.headers("Origin"), request.headers("Referer"))) {
+            halt(403, error(response, 403, "This request requires the Datatools origin."));
+        }
+        Document session = readSession(request);
+        Document identity = session == null ? null : store.getIdentity(session.getString("identity"));
+        if (identity == null) halt(401, error(response, 401, "An OIDC session is required."));
+        request.attribute("user", OidcPermissions.profile(identity, bootstrapSubject));
+        request.attribute("oidcAuthenticated", true);
+    }
+
+    public static boolean isAuthenticatedRequest(Request request) {
+        return Boolean.TRUE.equals(request.attribute("oidcAuthenticated"));
+    }
+
+    public static Auth0UserProfile anonymousProfile() {
+        return OidcPermissions.profile(new Document(), "");
+    }
+
+    static boolean requiresSameOrigin(String method, String path) {
+        // Some legacy GET endpoints start jobs or issue download tokens.
+        if ("GET".equals(method)) {
+            return path.matches("(?i).*/secure/(project/[^/]+/(download|downloadtoken|thirdPartySync/[^/]+)"
+                + "|snapshot/[^/]+/(download|downloadtoken)|feedversion/[^/]+/downloadtoken)/?");
+        }
+        return !("HEAD".equals(method) || "OPTIONS".equals(method));
+    }
+
+    static boolean matchesOrigin(URI expected, String originHeader, String referer) {
+        if (originHeader != null) return expected.toString().equals(originHeader);
+        if (referer == null) return false;
+        try {
+            URI page = URI.create(referer);
+            if (page.getHost() == null || page.getRawUserInfo() != null) return false;
+            return expected.equals(publicOrigin(URI.create(page.getScheme() + "://" + page.getRawAuthority())));
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 

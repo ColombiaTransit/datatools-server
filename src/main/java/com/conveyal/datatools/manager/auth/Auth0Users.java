@@ -1,5 +1,6 @@
 package com.conveyal.datatools.manager.auth;
 
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.DataManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -333,10 +334,12 @@ public class Auth0Users {
     }
 
     public static Set<String> getVerifiedEmailsForAdmins() {
+        if (OidcController.isEnabled()) return Set.of();
         return getVerifiedEmails(getAdminUsers());
     }
 
     public static Set<String> getVerifiedEmailsBySubscription(String subscriptionType, String target) {
+        if (OidcController.isEnabled()) return Set.of();
         return getVerifiedEmails(getUsersBySubscription(subscriptionType, target));
     }
 

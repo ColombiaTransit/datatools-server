@@ -1,6 +1,7 @@
 package com.conveyal.datatools.manager.controllers.api;
 
 import com.conveyal.datatools.manager.DataManager;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.utils.json.JsonUtil;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
@@ -25,11 +26,13 @@ public class AppInfoController {
     private static ObjectNode getInfo(Request req, Response res) {
         // TODO: convert into a POJO if more stuff is needed here. Although there would need to be an accommodation for
         //  the config field, which has a structure that is dependent on whatever is included in server.yml.
-        return JsonUtil.objectMapper.createObjectNode()
+        ObjectNode info = JsonUtil.objectMapper.createObjectNode()
             .put("repoUrl", repoUrl)
             .put("commit", commit)
             // Add config variables. NOTE: this uses server.yml, which is not intended to have any secure information.
             .putPOJO("config", DataManager.getPublicConfig());
+        if (OidcController.isEnabled()) info.put("authMode", "oidc");
+        return info;
     }
 
     public static void register (String apiPrefix) {

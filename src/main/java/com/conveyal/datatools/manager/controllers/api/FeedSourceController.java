@@ -5,6 +5,7 @@ import com.conveyal.datatools.common.utils.aws.CheckedAWSException;
 import com.conveyal.datatools.common.utils.aws.S3Utils;
 import com.conveyal.datatools.manager.DataManager;
 import com.conveyal.datatools.manager.auth.Actions;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.auth.Auth0UserProfile;
 import com.conveyal.datatools.manager.extensions.ExternalFeedResource;
 import com.conveyal.datatools.manager.jobs.FetchSingleFeedJob;
@@ -37,6 +38,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -139,6 +141,10 @@ public class FeedSourceController {
             logMessageAndHalt(req, 403, "User not allowed to create feed source");
             return null;
         }
+        if (OidcController.isAuthenticatedRequest(req)) {
+            newFeedSource.editorNamespace = null;
+            newFeedSource.publishedVersionId = null;
+        }
         // User checks out. OK to create new feed source.
         try {
             Persistence.feedSources.create(newFeedSource);
@@ -221,6 +227,13 @@ public class FeedSourceController {
         String feedSourceId = req.params("id");
         FeedSource formerFeedSource = requestFeedSourceById(req, Actions.MANAGE);
         FeedSource updatedFeedSource = getPOJOFromRequestBody(req, FeedSource.class);
+        if (OidcController.isAuthenticatedRequest(req)) {
+            if (!Objects.equals(formerFeedSource.projectId, updatedFeedSource.projectId)) {
+                logMessageAndHalt(req, 400, "A feed source cannot be moved through this endpoint.");
+            }
+            updatedFeedSource.editorNamespace = formerFeedSource.editorNamespace;
+            updatedFeedSource.publishedVersionId = formerFeedSource.publishedVersionId;
+        }
         validate(req, updatedFeedSource);
         // Feed source previously had a URL, but it has been changed. In this case, we reset the last fetched timestamp.
         if (formerFeedSource.url != null && !formerFeedSource.url.equals(updatedFeedSource.url)) {

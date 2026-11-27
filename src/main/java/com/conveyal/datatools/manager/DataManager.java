@@ -9,6 +9,7 @@ import com.conveyal.datatools.editor.controllers.api.EditorControllerImpl;
 import com.conveyal.datatools.editor.controllers.api.GraphHopperController;
 import com.conveyal.datatools.editor.controllers.api.SnapshotController;
 import com.conveyal.datatools.manager.auth.Auth0Connection;
+import com.conveyal.datatools.manager.auth.oidc.OidcApiPermissions;
 import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.controllers.DumpController;
 import com.conveyal.datatools.manager.controllers.api.AppInfoController;
@@ -194,12 +195,12 @@ public class DataManager {
     static void registerRoutes() throws IOException {
 
         CorsFilter.apply();
+        OidcController oidc = OidcController.registerIfEnabled();
         if (isModuleEnabled("metrics")) {
             MetricsController.register();
         }
         // Initialize GTFS GraphQL API service
-        // FIXME: Add user permissions check to ensure user has access to feeds.
-        GraphQLController.initialize(GTFS_DATA_SOURCE, GTFS_API_PREFIX);
+        GraphQLController.initialize(GTFS_DATA_SOURCE, GTFS_API_PREFIX, oidc != null);
         // Register core API routes
         AppInfoController.register(API_PREFIX);
         ProjectController.register(API_PREFIX);
@@ -279,30 +280,36 @@ public class DataManager {
             URL gtfsplus = DataManager.class.getResource("/gtfs/gtfsplus.yml");
             gtfsPlusConfig = yamlMapper.readTree(Resources.toString(gtfsplus, Charsets.UTF_8));
         }
-        if (isModuleEnabled("user_admin")) {
+        if (oidc == null && isModuleEnabled("user_admin")) {
             UserController.register(API_PREFIX);
         }
-        if (isModuleEnabled("dump")) {
+        if (oidc == null && isModuleEnabled("dump")) {
             DumpController.register("/");
         }
-        before(EDITOR_API_PREFIX + "secure/*", ((request, response) -> {
-            Auth0Connection.checkUser(request);
-            Auth0Connection.checkEditPrivileges(request);
-        }));
-
-
-        before(API_PREFIX + "secure/*", (request, response) -> {
-            if(request.requestMethod().equals("OPTIONS")) return;
-            Auth0Connection.checkUser(request);
-        });
-
-        // FIXME: Add auth check for gtfs-api. This is tricky because it requires extracting the namespace argument from
-        // the GraphQL query, which could be embedded in the query itself or in the variables JSON. We would then need
-        // to check against both the snapshots and feed versions collections for the feed source ID to use in the
-        // permissions check.
-//        before(GTFS_API_PREFIX + "*", (request, response) -> {
-//            Auth0Connection.checkGTFSPrivileges(request);
-//        });
+        if (oidc == null) {
+            before(EDITOR_API_PREFIX + "secure/*", (request, response) -> {
+                Auth0Connection.checkUser(request);
+                Auth0Connection.checkEditPrivileges(request);
+            });
+            before(API_PREFIX + "secure/*", (request, response) -> {
+                if (!"OPTIONS".equals(request.requestMethod())) Auth0Connection.checkUser(request);
+            });
+        } else {
+            before(API_PREFIX + "secure/*", (request, response) -> {
+                if (!"OPTIONS".equals(request.requestMethod())) oidc.checkUser(request, response);
+            });
+            before(EDITOR_API_PREFIX + "secure/*", (request, response) -> {
+                if ("OPTIONS".equals(request.requestMethod())) return;
+                oidc.checkUser(request, response);
+                OidcApiPermissions.checkEditor(request);
+            });
+            before(EDITOR_API_PREFIX + "deletelock/*", (request, response) -> {
+                oidc.checkUser(request, response);
+                OidcApiPermissions.checkEditor(request);
+            });
+            before(API_PREFIX + "public/*", (request, response) ->
+                request.attribute("user", OidcController.anonymousProfile()));
+        }
 
         // return "application/json" for all API routes
         before(API_PREFIX + "*", (request, response) -> {
@@ -324,7 +331,6 @@ public class DataManager {
             response.type("text/html");
             return auth0html;
         });
-        OidcController.registerIfEnabled();
 
         /////////////////    Final API routes     /////////////////////
 

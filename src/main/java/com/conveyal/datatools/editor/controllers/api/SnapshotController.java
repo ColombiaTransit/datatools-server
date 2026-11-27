@@ -7,6 +7,7 @@ import com.conveyal.datatools.editor.jobs.CreateSnapshotJob;
 import com.conveyal.datatools.editor.jobs.ExportSnapshotToGTFSJob;
 import com.conveyal.datatools.manager.DataManager;
 import com.conveyal.datatools.manager.auth.Auth0UserProfile;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.auth.Actions;
 import com.conveyal.datatools.manager.controllers.api.FeedVersionController;
 import com.conveyal.datatools.manager.jobs.CreateFeedVersionFromSnapshotJob;
@@ -59,8 +60,16 @@ public class SnapshotController {
         String id = req.params("id");
         if (id == null) logMessageAndHalt(req, 400, "Must provide valid snapshot ID");
         // Check user permissions on feed source.
-        FeedVersionController.requestFeedSourceById(req, Actions.VIEW, "feedId");
-        return Persistence.snapshots.getById(id);
+        FeedSource feed = FeedVersionController.requestFeedSourceById(req, Actions.VIEW, "feedId");
+        return requireSnapshotInFeed(req, id, feed);
+    }
+
+    private static Snapshot requireSnapshotInFeed(Request req, String id, FeedSource feed) {
+        Snapshot snapshot = Persistence.snapshots.getById(id);
+        if (snapshot == null || !feed.id.equals(snapshot.feedSourceId)) {
+            logMessageAndHalt(req, 404, "Snapshot does not exist for this feed.");
+        }
+        return snapshot;
     }
 
     private static boolean getPublishProprietaryFiles(Request req) {
@@ -97,6 +106,12 @@ public class SnapshotController {
         // Ensure feed source ID and snapshotOf namespace is correct
         snapshot.feedSourceId = feedSource.id;
         snapshot.snapshotOf = feedSource.editorNamespace;
+        if (OidcController.isAuthenticatedRequest(req)) {
+            snapshot.feedVersionId = null;
+            if (publishNewVersion && !userProfile.canManageFeed(feedSource)) {
+                logMessageAndHalt(req, 403, "Feed manager permission is required to publish a version.");
+            }
+        }
         snapshot.storeUser(userProfile);
         // If there is no active buffer for feed source, set boolean to update it to the new snapshot namespace.
         // Otherwise, creating a snapshot will just create a copy of the tables and leave the buffer untouched.
@@ -152,10 +167,7 @@ public class SnapshotController {
         // FIXME Ensure namespace id exists in database?
         // Retrieve feed source.
         FeedSource feedSource = FeedVersionController.requestFeedSourceById(req, Actions.EDIT, "feedId");
-        Snapshot snapshotToRestore = Persistence.snapshots.getById(id);
-        if (snapshotToRestore == null) {
-            logMessageAndHalt(req, 400, "Must specify valid snapshot ID");
-        }
+        Snapshot snapshotToRestore = requireSnapshotInFeed(req, id, feedSource);
         // Update editor namespace pointer.
         if (snapshotToRestore.namespace == null) {
             logMessageAndHalt(req, 400, "Failed to restore snapshot. No namespace found.");
@@ -221,8 +233,7 @@ public class SnapshotController {
         // Check feed source permissions.
         FeedSource feedSource = FeedVersionController.requestFeedSourceById(req, Actions.EDIT, "feedId");
         // Retrieve snapshot
-        Snapshot snapshot = Persistence.snapshots.getById(id);
-        if (snapshot == null) logMessageAndHalt(req, 400, "Must provide valid snapshot ID.");
+        Snapshot snapshot = requireSnapshotInFeed(req, id, feedSource);
         try {
             // Remove the snapshot and then renumber the snapshots
             snapshot.delete();

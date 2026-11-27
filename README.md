@@ -15,10 +15,11 @@ The easiest way to get `datatools-server` running is to use the provided `Docker
 
 ## OIDC login preview
 
-The server has opt-in OpenID Connect endpoints. They establish a Datatools
-session and record the provider identity in MongoDB. Datatools API permissions
-and the UI still use their existing authentication configuration during this
-preview.
+The server has an opt-in OpenID Connect mode. It uses a Datatools session
+cookie to authenticate the protected manager and editor API, and reads
+permissions from MongoDB for each request. Enable it in a test deployment
+until an OIDC-capable UI is available. With OIDC disabled, the API uses its
+existing authentication configuration.
 
 1. Create a confidential OIDC client with Authorization Code flow, S256 PKCE
    and RS256 ID tokens. Register the exact redirect URI
@@ -65,9 +66,12 @@ A grant without a `feedId` applies to every feed in the project. Supported roles
 are `viewer`, `editor`, `feed-manager`, `approver` and `project-admin`. These
 map to the corresponding Datatools permissions. Project administrators manage
 the entire project. To revoke all assignments, send `{"grants":[]}`.
-The session endpoint returns the current grants under `permissions`. Use the
-preview endpoints to configure access while the UI and existing data APIs
-continue to use the current authentication configuration.
+The session endpoint returns the current grants under `permissions`.
+Clients can detect the active mode through `authMode: "oidc"` in the public
+app info response. Send API requests from the configured Datatools origin
+with the session cookie. Requests that change data must establish that origin.
+The legacy Auth0 user administration endpoints and Auth0-backed email
+subscriptions are unavailable in OIDC mode.
 
 ## Getting in touch
 

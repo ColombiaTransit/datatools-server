@@ -5,6 +5,7 @@ import com.conveyal.datatools.common.utils.aws.CheckedAWSException;
 import com.conveyal.datatools.common.utils.aws.S3Utils;
 import com.conveyal.datatools.manager.DataManager;
 import com.conveyal.datatools.manager.auth.Auth0UserProfile;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.auth.Actions;
 import com.conveyal.datatools.manager.jobs.CreateFeedVersionFromSnapshotJob;
 import com.conveyal.datatools.manager.jobs.GisExportJob;
@@ -188,7 +189,8 @@ public class FeedVersionController  {
         // TODO: Should the ability to create a feedVersion from snapshot be controlled by the 'edit-gtfs' privilege?
         FeedSource feedSource = requestFeedSourceById(req, Actions.MANAGE);
         Snapshot snapshot = Persistence.snapshots.getById(req.queryParams("snapshotId"));
-        if (snapshot == null) {
+        if (snapshot == null || (OidcController.isAuthenticatedRequest(req)
+            && !feedSource.id.equals(snapshot.feedSourceId))) {
             logMessageAndHalt(req, 400, "Must provide valid snapshot ID");
         }
         // Publishing the proprietary files will preserve the pattern names in the newly published feed version.
@@ -320,6 +322,9 @@ public class FeedVersionController  {
         String type = req.queryParams("type");
         Auth0UserProfile userProfile = req.attribute("user");
         List<String> feedIds = Arrays.asList(req.queryParams("feedId").split(","));
+        if (OidcController.isAuthenticatedRequest(req)) {
+            feedIds.forEach(id -> requestFeedVersion(req, Actions.VIEW, id));
+        }
         File temp = File.createTempFile("gis_" + type, ".zip");
         // Create and run shapefile export.
         GisExportJob.ExportType exportType = GisExportJob.ExportType.valueOf(type);

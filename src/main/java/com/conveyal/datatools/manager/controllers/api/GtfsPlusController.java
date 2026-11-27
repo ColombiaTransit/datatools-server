@@ -2,6 +2,8 @@ package com.conveyal.datatools.manager.controllers.api;
 
 import com.conveyal.datatools.common.utils.SparkUtils;
 import com.conveyal.datatools.manager.DataManager;
+import com.conveyal.datatools.manager.auth.Actions;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.auth.Auth0UserProfile;
 import com.conveyal.datatools.manager.gtfsplus.GtfsPlusValidation;
 import com.conveyal.datatools.manager.jobs.ProcessSingleFeedJob;
@@ -56,12 +58,18 @@ public class GtfsPlusController {
 
     private static final FeedStore gtfsPlusStore = new FeedStore(DataManager.GTFS_PLUS_SUBDIR);
 
+    private static String checkedVersionId(Request req, Actions action) {
+        String id = req.params("versionid");
+        if (OidcController.isAuthenticatedRequest(req)) FeedVersionController.requestFeedVersion(req, action, id);
+        return id;
+    }
+
     /**
      * Upload a GTFS+ file based on a specific feed version and replace (or create)
      * the file in the GTFS+ specific feed store.
      */
     private static Boolean uploadGtfsPlusFile (Request req, Response res) {
-        String feedVersionId = req.params("versionid");
+        String feedVersionId = checkedVersionId(req, Actions.EDIT);
         File newGtfsFile = gtfsPlusStore.getFeedFile(feedVersionId);
         copyRequestStreamIntoFile(req, newGtfsFile);
         return true;
@@ -72,7 +80,7 @@ public class GtfsPlusController {
      * has been uploaded for the feed version, the original feed version will be returned.
      */
     private static HttpServletResponse getGtfsPlusFile(Request req, Response res) {
-        String feedVersionId = req.params("versionid");
+        String feedVersionId = checkedVersionId(req, Actions.VIEW);
         LOG.info("Downloading GTFS+ file for FeedVersion {}", feedVersionId);
 
         // check for saved
@@ -137,7 +145,7 @@ public class GtfsPlusController {
      * determine whether any GTFS+ edits have been made to
      */
     private static Long getGtfsPlusFileTimestamp(Request req, Response res) {
-        String feedVersionId = req.params("versionid");
+        String feedVersionId = checkedVersionId(req, Actions.VIEW);
 
         // check for saved GTFS+ data
         File file = gtfsPlusStore.getFeed(feedVersionId);
@@ -160,7 +168,7 @@ public class GtfsPlusController {
      */
     private static String publishGtfsPlusFile(Request req, Response res) {
         Auth0UserProfile profile = req.attribute("user");
-        String feedVersionId = req.params("versionid");
+        String feedVersionId = checkedVersionId(req, Actions.MANAGE);
         LOG.info("Publishing GTFS+ for {}", feedVersionId);
         File plusFile = gtfsPlusStore.getFeed(feedVersionId);
         if (plusFile == null || !plusFile.exists()) {
@@ -253,8 +261,8 @@ public class GtfsPlusController {
      * version already has GTFS+ validation results, those will be returned instead of re-validating.
      */
     private static GtfsPlusValidation getGtfsPlusValidation(Request req, Response res) {
+        String feedVersionId = checkedVersionId(req, Actions.VIEW);
         try {
-            String feedVersionId = req.params("versionid");
             return GtfsPlusValidation.validate(feedVersionId);
         } catch(Exception e) {
             logMessageAndHalt(req, 500, "Could not read GTFS+ zip file", e);
@@ -267,7 +275,7 @@ public class GtfsPlusController {
      * referencing the original GTFS+ files for a feed version. Note: this will not delete the feed version itself.
      */
     private static String deleteGtfsPlusFile(Request req, Response res) {
-        String feedVersionId = req.params("versionid");
+        String feedVersionId = checkedVersionId(req, Actions.EDIT);
         File file = gtfsPlusStore.getFeed(feedVersionId);
         if (file == null) {
             logMessageAndHalt(req, HttpStatus.NOT_FOUND_404, "No GTFS+ file found for feed version");
