@@ -36,11 +36,16 @@ Turn **Client authentication** on and select **Standard flow**. Leave
 **Authorization**, **Direct access grants**, **Implicit flow**, **Service account
 roles**, and the other grant types off. Leave **Require DPoP bound tokens** off.
 
-Turn **Require PKCE** on and use `S256`. If your Keycloak version exposes the
-method in the client's **Advanced** settings, select `S256` there after saving.
-Click **Next**.
-
 ![Capability config with Client authentication and Standard flow enabled, before enabling Require PKCE](images/keycloak-client-capabilities.png)
+
+Turn **Require PKCE** on to reveal **PKCE Method**, then select or keep
+`S256`. Click **Next**.
+
+![Require PKCE switched on and PKCE Method set to S256](images/keycloak-require-pkce.png)
+
+On older Keycloak releases without the switch, select `S256` under
+**Proof Key for Code Exchange Code Challenge Method** in the client's
+**Advanced** settings after saving.
 
 ### Login settings
 
