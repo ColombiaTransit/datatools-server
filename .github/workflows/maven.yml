@@ -30,22 +30,27 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      mongo:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.adminCommand({ping: 1}).ok === 1 ? 0 : 1)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v2
-      - name: Set up JDK 19
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
-          java-version: 19
+          java-version: 21
           distribution: 'temurin'
       # Install node 26 for running e2e tests (and for maven-semantic-release).
       - name: Use Node.js 26.x
         uses: actions/setup-node@v1
         with:
           node-version: 26.x
-      - name: Start MongoDB
-        uses: supercharge/mongodb-github-action@1.12.1
-        with:
-          mongodb-version: 4.2
       - name: Setup Maven Cache
         uses: actions/cache@v4
         id: cache
