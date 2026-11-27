@@ -17,9 +17,12 @@ The easiest way to get `datatools-server` running is to use the provided `Docker
 
 The server has an opt-in OpenID Connect mode. It uses a Datatools session
 cookie to authenticate the protected manager and editor API, and reads
-permissions from MongoDB for each request. Enable it in a test deployment
-until an OIDC-capable UI is available. With OIDC disabled, the API uses its
-existing authentication configuration.
+permissions from MongoDB for each request. Use an OIDC-capable Datatools UI
+with this mode. With OIDC disabled, the API uses its existing authentication
+configuration.
+
+For a walkthrough with a separately hosted Keycloak instance, see
+[Configure a Keycloak client for Datatools](docs/keycloak-setup.md).
 
 1. Create a confidential OIDC client with Authorization Code flow, S256 PKCE
    and RS256 ID tokens. Register the exact redirect URI
