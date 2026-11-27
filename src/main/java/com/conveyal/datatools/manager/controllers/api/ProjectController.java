@@ -5,6 +5,7 @@ import com.conveyal.datatools.common.utils.SparkUtils;
 import com.conveyal.datatools.common.utils.aws.S3Utils;
 import com.conveyal.datatools.manager.DataManager;
 import com.conveyal.datatools.manager.auth.Auth0UserProfile;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.jobs.FetchProjectFeedsJob;
 import com.conveyal.datatools.manager.jobs.PublishProjectFeedsJob;
 import com.conveyal.datatools.manager.jobs.MergeFeedsJob;
@@ -80,7 +81,9 @@ public class ProjectController {
         String organizationId = (String) newProjectFields.get("organizationId");
         boolean allowedToCreate = userProfile.canAdministerApplication() || userProfile.canAdministerOrganization(organizationId);
         // Data manager can operate without organizations for now, so we (hackishly/insecurely) deactivate permissions here
-        if (organizationId == null) allowedToCreate = true;
+        if (organizationId == null && !OidcController.isAuthenticatedRequest(req)) {
+            allowedToCreate = true;
+        }
         if (allowedToCreate) {
             Project newlyStoredProject = Persistence.projects.create(req.body());
             Scheduler.handleAutoFeedFetch(newlyStoredProject);
@@ -272,6 +275,12 @@ public class ProjectController {
      */
     private static Object getFeedDownloadCredentials(Request req, Response res) {
         Project project = requestProjectById(req, "view");
+        if (OidcController.isAuthenticatedRequest(req)) {
+            Auth0UserProfile user = req.attribute("user");
+            if (!user.canAdministerProject(project)) {
+                logMessageAndHalt(req, 403, "Project administrator permission is required for the merged feed.");
+            }
+        }
 
         // if storing feeds on s3, return temporary s3 credentials for that zip file
         if (DataManager.useS3) {

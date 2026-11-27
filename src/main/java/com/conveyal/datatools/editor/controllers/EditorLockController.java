@@ -2,6 +2,7 @@ package com.conveyal.datatools.editor.controllers;
 
 import com.conveyal.datatools.common.utils.SparkUtils;
 import com.conveyal.datatools.manager.auth.Auth0UserProfile;
+import com.conveyal.datatools.manager.auth.oidc.OidcController;
 import com.conveyal.datatools.manager.models.JsonViews;
 import com.conveyal.datatools.manager.utils.json.JsonManager;
 import com.google.gson.JsonObject;
@@ -15,6 +16,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 import static com.conveyal.datatools.common.utils.SparkUtils.logMessageAndHalt;
@@ -129,12 +131,12 @@ public class EditorLockController {
             LOG.warn("No active editor session to maintain {}.", sessionId);
             logMessageAndHalt(req, 400, "No active session for feedId. Please refresh your browser and try editing later.");
             return false;
-        } else if (!currentSession.sessionId.equals(sessionId)) {
+        } else if (!currentSession.sessionId.equals(sessionId) || !isLockOwner(req, currentSession)) {
             // If there is an active session but it doesn't match the session, someone else (or the current user) is
             // editing elsewhere. A user should only be trying to maintain a lock if it had an active session at one
             // point. If we get to this point, it is because the user's session has expired and some other session took
             // its place.
-            if (currentSession.userEmail.equals(email)) {
+            if (Objects.equals(currentSession.userEmail, email)) {
                 // If the new current session is held by this user, give them the option to evict the current session /
                 // unlock the feed.
                 LOG.warn("User {} already has an active editor session {} for feed {}.", email, currentSession.sessionId, currentSession.feedId);
@@ -146,6 +148,12 @@ public class EditorLockController {
             return false;
         }
         return true;
+    }
+
+    private static boolean isLockOwner(Request request, EditorSession session) {
+        if (!OidcController.isAuthenticatedRequest(request)) return true;
+        Auth0UserProfile user = request.attribute("user");
+        return Objects.equals(session.userId, user.getUser_id());
     }
 
     private static String maintainLock(Request req, Response res) {
@@ -183,7 +191,7 @@ public class EditorLockController {
             // If there is no current session to delete/overwrite, request that user reloads browser.
             LOG.warn("No active session to overwrite/delete.");
             return SparkUtils.formatJSON("No active session to take over. Please refresh your browser and try editing later.", 202);
-        } else if (!currentSession.sessionId.equals(parsedReq.sessionId)) {
+        } else if (!currentSession.sessionId.equals(parsedReq.sessionId) || !isLockOwner(req, currentSession)) {
             // If there is a different active session for some user, allow deletion / overwrite.
             // Note: There used to be a check here that the requesting user was the same as the user with an open
             // session; however, this has been removed because in practice it became a nuisance. Respectful users with

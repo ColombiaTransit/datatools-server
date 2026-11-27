@@ -12,6 +12,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Created by demory on 1/18/16.
@@ -144,7 +145,7 @@ public class Auth0UserProfile {
             }
 
             for(int i = 0; i < this.datatools.size(); i++) {
-                if (this.datatools.get(i).clientId.equals(DataManager.getConfigPropertyAsText("AUTH0_CLIENT_ID"))) {
+                if (Objects.equals(this.datatools.get(i).clientId, DataManager.getConfigPropertyAsText("AUTH0_CLIENT_ID"))) {
                     this.datatools.set(i, datatools);
                 }
             }
@@ -154,7 +155,7 @@ public class Auth0UserProfile {
             if (localPermissions != null) return localPermissions;
             for(int i = 0; i < this.datatools.size(); i++) {
                 DatatoolsInfo dt = this.datatools.get(i);
-                if (dt.clientId.equals(DataManager.getConfigPropertyAsText("AUTH0_CLIENT_ID"))) {
+                if (Objects.equals(dt.clientId, DataManager.getConfigPropertyAsText("AUTH0_CLIENT_ID"))) {
                     return dt;
                 }
             }
