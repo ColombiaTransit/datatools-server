@@ -36,6 +36,13 @@ public class Auth0UserProfile {
         setApp_metadata(new AppMetadata());
     }
 
+    /** Adapt locally assigned permissions to the existing Datatools authorization checks. */
+    public static Auth0UserProfile fromLocalPermissions(String email, String userId, DatatoolsInfo permissions) {
+        Auth0UserProfile profile = new Auth0UserProfile(email, userId);
+        profile.app_metadata.localPermissions = permissions;
+        return profile;
+    }
+
     /**
      * Utility method for creating a test admin (with application-admin permissions) user.
      */
@@ -121,6 +128,8 @@ public class Auth0UserProfile {
     public static class AppMetadata {
         @JsonProperty("datatools")
         List<DatatoolsInfo> datatools;
+        @JsonIgnore
+        private DatatoolsInfo localPermissions;
 
         public AppMetadata() {}
 
@@ -142,6 +151,7 @@ public class Auth0UserProfile {
         }
         @JsonIgnore
         public DatatoolsInfo getDatatoolsInfo() {
+            if (localPermissions != null) return localPermissions;
             for(int i = 0; i < this.datatools.size(); i++) {
                 DatatoolsInfo dt = this.datatools.get(i);
                 if (dt.clientId.equals(DataManager.getConfigPropertyAsText("AUTH0_CLIENT_ID"))) {

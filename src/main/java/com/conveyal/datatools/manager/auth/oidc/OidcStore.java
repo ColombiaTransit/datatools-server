@@ -4,6 +4,7 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.UpdateOptions;
 import com.nimbusds.openid.connect.sdk.claims.IDTokenClaimsSet;
 import org.bson.Document;
@@ -13,8 +14,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Date;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static com.mongodb.client.model.Filters.and;
@@ -78,7 +81,17 @@ final class OidcStore {
     }
 
     Document getIdentity(String id) {
-        return identities.find(eq("_id", id)).first();
+        return identities.find(and(eq("_id", id), eq("issuer", issuer))).first();
+    }
+
+    List<Document> listIdentities(String after, int limit) {
+        var filter = after == null ? eq("issuer", issuer) : and(eq("issuer", issuer), gt("_id", after));
+        return identities.find(filter).sort(Sorts.ascending("_id")).limit(limit).into(new ArrayList<>());
+    }
+
+    boolean replaceGrants(String identity, List<Document> grants) {
+        return identities.updateOne(and(eq("_id", identity), eq("issuer", issuer)), set("grants", grants))
+            .getMatchedCount() == 1;
     }
 
     void removeSession(String session) {

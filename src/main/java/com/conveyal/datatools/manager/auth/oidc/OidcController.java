@@ -1,6 +1,7 @@
 package com.conveyal.datatools.manager.auth.oidc;
 
 import com.conveyal.datatools.manager.persistence.Persistence;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nimbusds.jose.JOSEException;
@@ -17,28 +18,34 @@ import spark.Response;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 
 import static com.conveyal.datatools.manager.DataManager.getConfigPropertyAsText;
 import static spark.Spark.before;
 import static spark.Spark.get;
+import static spark.Spark.halt;
 import static spark.Spark.post;
+import static spark.Spark.put;
 
 /** Opt-in OIDC endpoints for establishing and inspecting a Datatools session. */
 public final class OidcController {
     public static final String PREFIX = "/api/auth/oidc/";
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final int USER_PAGE_SIZE = 100;
     private final OidcClient client;
     private final OidcStore store;
     private final URI origin;
+    private final String bootstrapSubject;
     private final String browserCookie;
     private final String sessionCookie;
     private final boolean secure;
 
-    private OidcController(OidcClient client, OidcStore store, URI origin) {
+    private OidcController(OidcClient client, OidcStore store, URI origin, String bootstrapSubject) {
         this.client = client;
         this.store = store;
         this.origin = origin;
+        this.bootstrapSubject = bootstrapSubject;
         secure = "https".equals(origin.getScheme());
         String prefix = secure ? "__Host-" : "";
         browserCookie = prefix + "datatools-oidc-login";
@@ -58,7 +65,7 @@ public final class OidcController {
             throw new IOException("OIDC discovery failed. Check OIDC_ISSUER and provider connectivity.");
         }
         OidcStore store = new OidcStore(Persistence.getMongoDatabase(), issuer, clientId);
-        OidcController controller = new OidcController(client, store, origin);
+        OidcController controller = new OidcController(client, store, origin, setting("OIDC_ADMIN_SUBJECT"));
         before(PREFIX + "*", (request, response) -> {
             response.header("Cache-Control", "no-store");
             response.header("Referrer-Policy", "no-referrer");
@@ -67,6 +74,9 @@ public final class OidcController {
         get(PREFIX + "callback", controller::callback);
         get(PREFIX + "session", controller::session);
         post(PREFIX + "logout", controller::logout);
+        get(PREFIX + "users", controller::listUsers);
+        get(PREFIX + "users/:id/grants", controller::getGrants);
+        put(PREFIX + "users/:id/grants", controller::replaceGrants);
     }
 
     private String login(Request request, Response response) {
@@ -112,23 +122,95 @@ public final class OidcController {
     private String session(Request request, Response response) {
         ObjectNode result = MAPPER.createObjectNode().put("authenticated", false);
         response.type("application/json");
-        String token = request.cookie(sessionCookie);
-        Document session = isToken(token) ? store.getSession(token) : null;
+        Document session = readSession(request);
         if (session == null) return result.toString();
         Document identity = store.getIdentity(session.getString("identity"));
         if (identity == null) return result.toString();
         result.put("authenticated", true);
         result.put("expiresAt", session.getDate("expiresAt").toInstant().toString());
-        result.putObject("user")
+        result.set("user", userSummary(identity).put("subject", identity.getString("subject")));
+        result.putObject("permissions")
+            .put("applicationAdmin", OidcPermissions.profile(identity, bootstrapSubject).canAdministerApplication())
+            .set("grants", MAPPER.valueToTree(OidcPermissions.grants(identity)));
+        return result.toString();
+    }
+
+    private String listUsers(Request request, Response response) {
+        requireAdministrator(request, response);
+        List<Document> users = store.listIdentities(parameter(request, "after"), USER_PAGE_SIZE + 1);
+        ObjectNode result = MAPPER.createObjectNode();
+        var entries = result.putArray("users");
+        users.stream().limit(USER_PAGE_SIZE).map(OidcController::userSummary).forEach(entries::add);
+        if (users.size() > USER_PAGE_SIZE) result.put("next", users.get(USER_PAGE_SIZE - 1).getString("_id"));
+        response.type("application/json");
+        return result.toString();
+    }
+
+    private String getGrants(Request request, Response response) {
+        requireAdministrator(request, response);
+        Document identity = store.getIdentity(request.params(":id"));
+        if (identity == null) return error(response, 404, "OIDC user not found.");
+        response.type("application/json");
+        return grantsResponse(OidcPermissions.grants(identity));
+    }
+
+    private String replaceGrants(Request request, Response response) {
+        if (!isSameOrigin(request)) return error(response, 403, "Changing OIDC grants requires a same-origin request.");
+        requireAdministrator(request, response);
+        String body = request.body();
+        if (body.length() > 65_536) return error(response, 413, "OIDC grants request is too large.");
+        List<Document> grants;
+        try {
+            grants = OidcPermissions.parseGrants(MAPPER.readTree(body),
+                projectId -> Persistence.projects.getById(projectId) != null,
+                (projectId, feedId) -> {
+                    var feed = Persistence.feedSources.getById(feedId);
+                    return feed != null && projectId.equals(feed.projectId);
+                });
+        } catch (JsonProcessingException e) {
+            return error(response, 400, "Invalid grants JSON.");
+        } catch (IllegalArgumentException e) {
+            return error(response, 400, e.getMessage());
+        }
+        if (!store.replaceGrants(request.params(":id"), grants)) return error(response, 404, "OIDC user not found.");
+        response.type("application/json");
+        return grantsResponse(grants);
+    }
+
+    private void requireAdministrator(Request request, Response response) {
+        Document session = readSession(request);
+        Document identity = session == null ? null : store.getIdentity(session.getString("identity"));
+        if (identity == null) halt(401, error(response, 401, "An OIDC session is required."));
+        if (!OidcPermissions.profile(identity, bootstrapSubject).canAdministerApplication()) {
+            halt(403, error(response, 403, "Datatools administrator permission is required."));
+        }
+    }
+
+    private Document readSession(Request request) {
+        String token = request.cookie(sessionCookie);
+        return isToken(token) ? store.getSession(token) : null;
+    }
+
+    private static ObjectNode userSummary(Document identity) {
+        return MAPPER.createObjectNode()
             .put("id", identity.getString("_id"))
             .put("name", identity.getString("name"))
             .put("email", identity.getString("email"))
             .put("emailVerified", Boolean.TRUE.equals(identity.getBoolean("emailVerified")));
+    }
+
+    private static String grantsResponse(List<Document> grants) {
+        ObjectNode result = MAPPER.createObjectNode();
+        result.set("grants", MAPPER.valueToTree(grants));
         return result.toString();
     }
 
+    private boolean isSameOrigin(Request request) {
+        return origin.toString().equals(request.headers("Origin"));
+    }
+
     private String logout(Request request, Response response) {
-        if (!origin.toString().equals(request.headers("Origin"))) {
+        if (!isSameOrigin(request)) {
             return error(response, 403, "OIDC logout requires a same-origin request.");
         }
         String token = request.cookie(sessionCookie);
